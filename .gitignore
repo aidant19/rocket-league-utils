@@ -1,2 +1,6 @@
 build/
 node_modules/
+test.replay
+reference.txt
+samplecompact.json
+samplefull.json

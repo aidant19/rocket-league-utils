@@ -14,10 +14,10 @@
   "license": "MIT",
   "dependencies": {
     "electron-settings": "^3.1.1",
-    "lodash": "^4.17.4"
+    "lodash": "^4.17.19"
   },
   "devDependencies": {
-    "electron": "^1.6.11",
+    "electron": "^1.8.8",
     "electron-builder": "^19.19.1"
   },
   "build": {

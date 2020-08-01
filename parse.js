@@ -3,13 +3,14 @@ const cp = require('child_process')
 const fs = require('fs')
 const path = require('path')
 const { remote: { app } } = require('electron')
+const { update } = require('lodash')
 
 //const writeFile = util.promisify(fs.writeFile)
 const includeFilename = false
 
 const TMP_FILE = `${app.getPath('userData')}/output.json`
 
-/*async*/ function parse (filename, rattletrapPath = 'rattletrap') {
+/*async*/ function parse(filename, rattletrapPath = 'rattletrap') {
   return new Promise((resolve, reject) => {
     cp.exec(`"${rattletrapPath}" --compact --input "${filename}" --output "${TMP_FILE}"`, function (error, stdout, stderr) {
       if (stderr) {
@@ -19,7 +20,7 @@ const TMP_FILE = `${app.getPath('userData')}/output.json`
       try {
         const body = fs.readFileSync(path.resolve(TMP_FILE))
 
-        resolve(JSON.parse(body).header.body.properties)
+        resolve(JSON.parse(body))
         fs.unlinkSync(TMP_FILE)
       }
       catch (e) {
@@ -30,14 +31,68 @@ const TMP_FILE = `${app.getPath('userData')}/output.json`
   //const { stdout, stderr } = await exec(`${RT} decode ${filename} ${TMP_FILE}`)
 }
 
-function filter (tree) {
+function filter(json) {
+  tree = json.header.body.properties
+  demos = getDemoStats(json)
   return {
-    playerStats: getPlayerStats(tree),
-    teamStats: getTeamStats(tree)
+    playerStats: getPlayerStats(tree, demos),
+    teamStats: getTeamStats(tree),
   }
 }
 
-function getTeamStats (tree) {
+function getDemoStats(json) {
+  let frames = json.content.body.frames
+  let frameCount = 0
+  let valueCount = 0
+  let playerNames = []
+  let playerIDs = []
+  let pawnIDs = []
+  let pawnAssignments = []
+  let demos = []
+  let demoFound = false
+
+  frames.forEach(frame => {
+    frameCount++
+    frame.replications.forEach(replication => {
+      try {
+        replication.value.updated.forEach(update => {
+          valueCount++
+          if (update.name == 'Engine.PlayerReplicationInfo:PlayerName') {
+            if (playerNames.length < 6) {
+              playerNames.push(update.value.string)
+              playerIDs.push(replication.actor_id.value)
+            } else if (!playerIDs.includes(replication.actor_id.value)) {
+              console.log("unexpected behavior: player info reassignment found")
+            }
+          } else if (update.name == 'Engine.Pawn:PlayerReplicationInfo') {
+            if (pawnAssignments.includes(update.value.flagged_int.int)) {
+              pawnIDs[pawnAssignments.indexOf(update.value.flagged_int.int)] = replication.actor_id.value
+            } else if (update.value.flagged_int.int == -1) {
+              demoFound = true
+            } else {
+              pawnAssignments.push(update.value.flagged_int.int)
+              pawnIDs.push(replication.actor_id.value)
+            }
+          } else if (update.name == 'TAGame.Car_TA:ReplicatedDemolish' && demoFound) {
+            playerID = pawnAssignments[pawnIDs.indexOf(update.value.demolish.attacker_actor_id)]
+            demos.push(playerNames[playerIDs.indexOf(playerID)])
+            demoFound = false
+          }
+        });
+      } catch (e) {
+        return
+      }
+    });
+  });
+  console.log("frames checked: " + frameCount)
+  console.log("values checked: " + valueCount)
+  demos.forEach(demo => {
+    console.log(demo)
+  });
+  return demos
+}
+
+function getTeamStats(tree) {
   let {
     Team0Score,
     Team1Score
@@ -46,7 +101,7 @@ function getTeamStats (tree) {
   return { 0: Team0Score || 0, 1: Team1Score || 0 }
 }
 
-function getPlayerStats (tree) {
+function getPlayerStats(tree, demos) {
   let players = tree.value.PlayerStats.value.array
 
   players = players.map(player => {
@@ -58,11 +113,21 @@ function getPlayerStats (tree) {
     return player
   })
 
+  players.forEach(player => {
+      let count = 0;
+      for (let i = 0; i < demos.length; i++) {
+        if (demos[i] == player.Name) {
+          count++;
+        }
+      }
+      player.Demos = count
+  });
+
   return players
   //console.log(JSON.stringify(players, null, '\t'))
 }
 
-function getValues (o) {
+function getValues(o) {
   const mapped = {}
 
   o.keys.forEach(k => {
@@ -86,7 +151,7 @@ const aliases = {
   Pts: 'Score'
 }
 
-function spreadsheet (games, paths, delimiter = '\t') {
+function spreadsheet(games, paths, delimiter = '\t') {
   let headers = columns.map(column => {
     return `"${column}"`
   })
@@ -94,6 +159,8 @@ function spreadsheet (games, paths, delimiter = '\t') {
   if (includeFilename) {
     headers = headers.concat('"Filename"')
   }
+
+  headers.push('"Demos"')
 
   headers = headers.join(delimiter)
 
@@ -118,6 +185,7 @@ function spreadsheet (games, paths, delimiter = '\t') {
       if (includeFilename) {
         values = values.concat(`"${path.basename(paths[i])}"`)
       }
+      values.push(player.Demos)
       return values.join(delimiter)
     })
   })
@@ -127,7 +195,7 @@ function spreadsheet (games, paths, delimiter = '\t') {
 
 const inputDirectory = process.argv[2]
 
-function parseFiles (/*inputDirectory,*/inputFiles, rattletrapPath, notifyFileCompletedFn) {
+function parseFiles(/*inputDirectory,*/inputFiles, rattletrapPath, notifyFileCompletedFn) {
   /*Promise.all(fs.readdirSync(path.resolve(inputDirectory))*/
 
   const paths = inputFiles
@@ -147,7 +215,7 @@ function parseFiles (/*inputDirectory,*/inputFiles, rattletrapPath, notifyFileCo
     })
   }, Promise.resolve([]))
 
-  return resultsPromise 
+  return resultsPromise
     .then(results => {
       const gameStats = results
         .map(filter)
@@ -164,9 +232,9 @@ module.exports = function (inputFiles, rattletrapPath) {
   return job
 }
 
-function flatten (arrays) {
+function flatten(arrays) {
   return arrays.reduce(
-    ( acc, cur ) => acc.concat(cur),
+    (acc, cur) => acc.concat(cur),
     []
   );
 }
